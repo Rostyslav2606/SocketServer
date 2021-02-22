@@ -18,7 +18,7 @@ namespace SocketServer
 
         public static void StartListening(int Port)
         {
-            IPEndPoint ipPoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), Port);
+            IPEndPoint ipPoint = new IPEndPoint(IPAddress.Any, Port);
             Console.WriteLine($"Local address and port : {ipPoint.ToString()}");
             
             try
@@ -50,6 +50,9 @@ namespace SocketServer
             // Get the socket that handles the client request.  
             Socket listener = (Socket)ar.AsyncState;
             Socket handler = listener.EndAccept(ar);
+
+            handler.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+
             Console.WriteLine($"Client IP - {handler.RemoteEndPoint}  connected.");
             IsListening = true;
             // Signal the main thread to continue. 
@@ -87,59 +90,31 @@ namespace SocketServer
                 if (bytesRead > 0)
                 {
                     // There  might be more data, so store the data received so far.  
-                    state.sb.Append(Encoding.ASCII.GetString(state.buffer, 0, bytesRead));
+                    var part = Encoding.ASCII.GetString(state.buffer, 0, bytesRead);
+                    state.sb.Append(part);
                     // Check for end-of-file tag. If it is not there, read more data.  
-                    content = state.sb.ToString().ToLower();
                     int CountIndexOf = content.IndexOf("\r\n");
-                    if (CountIndexOf > -1)
+                    if (part.Contains("\r\n"))
                     {
-                        int tempIn;
-                        if (int.TryParse(content, out tempIn))
+                        content = state.sb.ToString().ToLower();
+                        state.sb.Clear();
+
+                        // It is possible to get more then one command
+                        var commands = content.Split("\r\n");
+                        var commandsCount = commands.Length - 1;
+
+                        if(commands[commandsCount] != string.Empty)
                         {
-                            //Set integer
-                            state.Sum += tempIn;
-                            Console.WriteLine($"Integer entered to {tempIn}.\r\nThe total amount of entered integers is = {state.Sum}\r\n");
-                            Send(handler, $"Total  integers - {state.Sum}\r\nSet command>");
-                            state.sb.Clear();
-                            handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
+                            // Last command is not complete
+                            state.sb.Append(commands[commandsCount]);
                         }
-                        else if (CountIndexOf == 0)
+
+                        for(int i = 0; i < commandsCount; i++)
+                            ProcessCommand(state, commands[i]);
+
+                        if(handler.Connected)
                         {
-                            //Get more.
                             Send(handler, $"Set command>");
-                            state.sb.Clear();
-                            handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-                        }
-                        else if (content.IndexOf("list\r\n") > -1)
-                        {
-                            // Get all clients and summa  
-                            foreach (var itemSocket in _clientSockets)
-                            {
-                                Send(handler, $"Key - {itemSocket.Key}, Sum - {itemSocket.Value.Sum}\r\n");
-                            }
-                            Send(handler, $"Set command>");
-                            state.sb.Clear();
-                            handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-                        }
-                        else if (content.IndexOf("exit\r\n") > -1)
-                        {
-                            // Disconnect a client from a server.
-                            DisconnectSoket(state);
-                        }
-                        else if (content.IndexOf("exitall\r\n") > -1)
-                        {
-                            // Disconnect all clients from a server.
-                            IsListening = false;
-                            foreach (var itemSocket in _clientSockets)
-                            {
-                                DisconnectSoket(itemSocket.Value);
-                            }
-                        }
-                        else
-                        {
-                            // The set data is not correct. Get more.
-                            Send(handler, $"You entered an invalid integer. \r\nEnter an integer or one of the commands.\r\n\r\nSet command>");
-                            state.sb.Clear();
                             handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
                         }
                     }
@@ -149,12 +124,62 @@ namespace SocketServer
                         handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
                     }
                 }
+                else
+                {
+                    // Connection closed
+                    DisconnectSoket(state);
+                }
             }
             catch (SocketException e)
             {
                 Console.WriteLine(e.ToString());
                 DisconnectSoket(state); // Dont shutdown because the socket may be disposed and its disconnected anyway
+            }
+        }
+
+        private static void ProcessCommand(StateObject state, string content)
+        {
+            if (string.IsNullOrEmpty(content))
                 return;
+
+            var handler = state.workSocket;
+
+            if (int.TryParse(content, out var tempIn))
+            {
+                //Set integer
+                state.Sum += tempIn;
+                Console.WriteLine($"Integer entered to {tempIn}.\r\nThe total amount of entered integers is = {state.Sum}\r\n");
+                Send(handler, $"Total  integers - {state.Sum}\r\n");
+                state.sb.Clear();
+                handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
+            }
+            else if (content == "list")
+            {
+                // Get all clients and summa  
+                foreach (var itemSocket in _clientSockets)
+                {
+                    Send(handler, $"Key - {itemSocket.Key}, Sum - {itemSocket.Value.Sum}\r\n");
+                }
+
+            }
+            else if (content.IndexOf("exit") > -1)
+            {
+                // Disconnect a client from a server.
+                DisconnectSoket(state);
+            }
+            else if (content.IndexOf("exitall") > -1)
+            {
+                // Disconnect all clients from a server.
+                IsListening = false;
+                foreach (var itemSocket in _clientSockets)
+                {
+                    DisconnectSoket(itemSocket.Value);
+                }
+            }
+            else
+            {
+                // The set data is not correct. Get more.
+                Send(handler, $"You entered an invalid integer. \r\nEnter an integer or one of the commands.\r\n\r\n");
             }
         }
 
