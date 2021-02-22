@@ -54,7 +54,7 @@ namespace SocketServer
             IsListening = true;
             // Signal the main thread to continue. 
             allDone.Set();
-            Send(handler, $"Server -> Hi {handler.RemoteEndPoint}!!!\r\nSet command>");
+            Send(handler, $"Server -> HI {handler.RemoteEndPoint}!!!\r\nSet command>");
 
             // Create the state object.  
             StateObject state = new StateObject();
